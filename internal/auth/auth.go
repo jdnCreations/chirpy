@@ -98,6 +98,19 @@ func GetRefreshToken(headers http.Header) (string, error) {
 	return "", errors.New("invalid refresh token")
 }
 
+func GetAPIKey(headers http.Header) (string, error) {
+	auth := headers.Get("Authorization")
+	if auth == "" {
+		return "", errors.New("no ApiKey")
+	}
+	split := strings.Split(auth, "ApiKey ")
+	if len(split) == 2 {
+		return split[1], nil
+	}
+
+	return "", errors.New("invalid api key")
+}
+
 func MakeRefreshToken() (string, error) {
 	c := 32
 	b := make([]byte, c)

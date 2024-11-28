@@ -11,7 +11,16 @@ VALUES(
 
 -- name: GetAllChirps :many
 SELECT * from chirps
-ORDER BY created_at ASC;
+ORDER BY 
+  CASE WHEN $1 = 'desc' then created_at END DESC,
+  CASE WHEN $1 = 'asc' then created_at END ASC;
+
+-- name: GetChirpsByUserId :many
+SELECT * from chirps
+WHERE user_id = $1
+ORDER BY 
+  CASE WHEN $2 = 'desc' then created_at END DESC,
+  CASE WHEN $2 = 'asc' then created_at END ASC;
 
 -- name: GetChirpById :one
 SELECT * from chirps

@@ -45,6 +45,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
   db *database.Queries
   secret string
+  polkaKey string
 }
 
 func readiness(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +78,7 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
 	cfg.fileserverHits.Store(0)
+  w.WriteHeader(200)
 }
 
 func cleanText(text string) string {
@@ -215,10 +217,38 @@ func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
-  chirps, err := cfg.db.GetAllChirps(r.Context())
-  if err != nil {
-    respondWithError(w, 500, "Could not fetch chirps")
-    return
+  // check for optional author_id parameter
+  a := r.URL.Query().Get("author_id")
+  s := r.URL.Query().Get("sort")
+  sortBy := "asc"
+
+  if strings.ToLower(s) == "desc" {
+    sortBy = strings.ToLower(s)
+  }
+
+  var chirps []database.Chirp
+  var err error
+
+  if a == "" {
+    chirps, err = cfg.db.GetAllChirps(r.Context(), sortBy)
+    if err != nil {
+      respondWithError(w, 500, "Could not fetch chirps")
+      return
+    }
+  } else {
+    id, err := uuid.Parse(a)
+    if err != nil {
+      respondWithError(w, 500, "invalid author id")
+      return
+    }
+    chirps, err = cfg.db.GetChirpsByUserId(r.Context(), database.GetChirpsByUserIdParams{
+      UserID: uuid.NullUUID{UUID: id, Valid: true},
+      Column2: sortBy,
+    })
+    if err != nil {
+      respondWithError(w, 500, "invalid author id")
+      return
+    }
   }
 
   dat := []Chirp{}
@@ -486,6 +516,17 @@ func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) handlerUpgrade(w http.ResponseWriter, r *http.Request) {
+  key, err := auth.GetAPIKey(r.Header)
+  if err != nil {
+    w.WriteHeader(401)
+    return
+  }
+
+  if key != cfg.polkaKey {
+    w.WriteHeader(401)
+    return
+  }
+
   type data struct {
     UserID string `json:"user_id"`
   }
@@ -497,7 +538,7 @@ func (cfg *apiConfig) handlerUpgrade(w http.ResponseWriter, r *http.Request) {
 
   decoder := json.NewDecoder(r.Body)
   reqData := req{}
-  err := decoder.Decode(&reqData)
+  err = decoder.Decode(&reqData)
   if err != nil {
     respondWithError(w, 401, "Something went wrong")
     return
@@ -521,15 +562,13 @@ func (cfg *apiConfig) handlerUpgrade(w http.ResponseWriter, r *http.Request) {
   }
 
   w.WriteHeader(204)
-  
-  
-
 }
 
 func main() {
     godotenv.Load()
     dbURL := os.Getenv("DB_URL")
     secret := os.Getenv("SECRET")
+    polkaKey := os.Getenv("POLKA_KEY")
     db, err := sql.Open("postgres", dbURL)
     if err != nil {
       log.Fatal(err) 
@@ -547,6 +586,7 @@ func main() {
 		apiConf := apiConfig{}
     apiConf.db = dbQueries
     apiConf.secret = secret
+    apiConf.polkaKey = polkaKey
 		mux.Handle("/app/", apiConf.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer((http.Dir("."))))))
 		mux.HandleFunc("GET /api/healthz", readiness)
 		mux.HandleFunc("GET /admin/metrics", apiConf.handlerMetrics)
