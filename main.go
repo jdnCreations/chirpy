@@ -349,10 +349,6 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
     return
   }
 
-  if err != nil {
-    respondWithError(w, 500, "could not add token to the database")
-    return
-  }
 
   type data struct {
     Token string `json:"token"`
@@ -384,6 +380,105 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
   }
 
   w.WriteHeader(204) 
+}
+
+func (cfg *apiConfig) handlerUpdate(w http.ResponseWriter, r *http.Request) {
+  token, err := auth.GetBearerToken(r.Header)
+  if err != nil {
+    respondWithError(w, 401, "invalid token")
+    return
+  }
+
+  userID, err := auth.ValidateJWT(token, cfg.secret)
+  if err != nil {
+    respondWithError(w, 401, "invalid token")
+    return
+  }
+
+  type parameters struct {
+    Password string `json:"password"`
+    Email string `json:"email"`
+  }
+
+  decoder := json.NewDecoder(r.Body)
+  params := parameters{}
+  err = decoder.Decode(&params)
+  if err != nil {
+    respondWithError(w, 401, "Something went wrong")
+    return
+  }
+
+  hashed, err := auth.HashPassword(params.Password)
+  if err != nil {
+    respondWithError(w, 401, "could not change password")
+    return
+  }
+
+  user, err := cfg.db.UpdateUser(r.Context(), database.UpdateUserParams{
+    ID: userID,
+    Email: params.Email,
+    HashedPassword: hashed,
+  })
+  if err != nil {
+    respondWithError(w, 401, err.Error())
+    return
+  }
+
+  userDat := User{
+    ID: user.ID,
+    CreatedAt: user.CreatedAt,
+    UpdatedAt: user.UpdatedAt,
+    Email: user.Email,
+  }
+
+  respondWithJSON(w, 200, userDat)
+}
+
+func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request) {
+  token, err := auth.GetBearerToken(r.Header)
+  if err != nil {
+    respondWithError(w, 401, "invalid token")
+    return
+  }
+
+  id := r.PathValue("chirpID")
+  chirpID, err := uuid.Parse(id)
+  if err != nil {
+    respondWithError(w, 401, "invalid chirp id")
+    return
+  }
+
+  userID, err := auth.ValidateJWT(token, cfg.secret)
+  if err != nil {
+    respondWithError(w, 401, "invalid token")
+    return
+  }
+
+  user, err := cfg.db.GetUserById(r.Context(), userID)
+  if err != nil {
+    respondWithError(w, 401, "invalid token")
+    return
+  }
+
+
+  chirpOwner, err := cfg.db.GetChirpById(r.Context(), chirpID)
+  if err != nil {
+    respondWithError(w, 401, "could not get chirp")
+    return
+  }
+
+  if chirpOwner.UserID.UUID == user.ID {
+    // user owns chirp, delete
+    err := cfg.db.DeleteChirpById(r.Context(), chirpID)
+    if err != nil {
+      respondWithError(w, 401, "could not delete chirp")
+      return
+    }
+    w.WriteHeader(204) 
+    return
+  }
+
+  w.WriteHeader(403)
 }
 
 func main() {
@@ -418,5 +513,7 @@ func main() {
     mux.HandleFunc("POST /api/login", apiConf.handlerLogin)
     mux.HandleFunc("POST /api/refresh", apiConf.handlerRefresh)
     mux.HandleFunc("POST /api/revoke", apiConf.handlerRevoke)
+    mux.HandleFunc("PUT /api/users", apiConf.handlerUpdate)
+    mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiConf.handlerDeleteChirp)
 		server.ListenAndServe()
 }
