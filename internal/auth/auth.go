@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -72,8 +74,6 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 
 func GetBearerToken(headers http.Header) (string, error) {
 	auth := headers.Get("Authorization")
-	fmt.Printf("Got auth header: %s", auth)
-
 	if auth == "" {
 		return "", errors.New("no Bearer")
 	}
@@ -83,4 +83,27 @@ func GetBearerToken(headers http.Header) (string, error) {
 	}
 
 	return "", errors.New("invalid bearer") 
+}
+
+func GetRefreshToken(headers http.Header) (string, error) {
+	auth := headers.Get("Authorization")
+	if auth == "" {
+		return "", errors.New("no Bearer")
+	}
+	split := strings.Split(auth, "Bearer ")
+	if len(split) == 2 {
+		return split[1], nil
+	}
+
+	return "", errors.New("invalid refresh token")
+}
+
+func MakeRefreshToken() (string, error) {
+	c := 32
+	b := make([]byte, c)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

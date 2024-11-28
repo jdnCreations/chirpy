@@ -81,3 +81,11 @@ func TestBearer(t *testing.T) {
 
 	t.Logf("Token valid")
 }
+
+func TestRefreshToken(t *testing.T) {
+	token, err := MakeRefreshToken()
+	if err != nil {
+		t.Fatal("could not create refresh token")
+	}
+	t.Logf("created refresh token %s", token)
+}

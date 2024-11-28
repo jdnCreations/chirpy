@@ -24,12 +24,12 @@ type User struct {
   UpdatedAt time.Time `json:"updated_at"`
   Email string `json:"email"`
   Token string `json:"token"`
+  RefreshToken string `json:"refresh_token"`
 }
 
 type UserInfo struct {
   Password string `json:"password"`
   Email string `json:"email"`
-  ExpiresInSeconds *int `json:"expires_in_seconds,omitempty"`
 }
 
 type Chirp struct {
@@ -270,24 +270,34 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
     return
   }
 
-
   err = auth.CheckPasswordHash(params.Password, user.HashedPassword)
   if err != nil {
     respondWithError(w, 401, err.Error())
     return
   }
 
-  expiresIn := time.Duration(1 * time.Hour) 
-
-  if params.ExpiresInSeconds != nil {
-    expiresIn = time.Duration(*params.ExpiresInSeconds) * time.Second
+  token, err := auth.MakeJWT(user.ID, cfg.secret, time.Duration(1 * time.Hour))
+  if err != nil {
+    respondWithError(w, 500, "could not make JWT")
+    return
   }
 
-  if expiresIn > time.Duration(1 * time.Hour) {
-    expiresIn = time.Duration(1 * time.Hour) 
-  } 
+  refreshToken, err := auth.MakeRefreshToken()
+  if err != nil {
+    respondWithError(w, 500, "could not make refresh token")
+    return
+  }
 
-  token, _ := auth.MakeJWT(user.ID, cfg.secret, expiresIn)
+  sixtyDays := time.Duration(1440 * time.Hour)
+  
+  _, err = cfg.db.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+    Token: refreshToken,
+    UserID: user.ID,
+    ExpiresAt: time.Now().UTC().Add(sixtyDays),
+  })
+  if err != nil {
+    respondWithError(w, 500, "could not save refresh token to database")
+  }
 
   userDat := User{
     ID: user.ID,
@@ -295,12 +305,86 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
     UpdatedAt: user.UpdatedAt,
     Email: user.Email,
     Token: token,
+    RefreshToken: refreshToken,
   }
 
   respondWithJSON(w, 200, userDat)
 }
 
+func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
+  token, err := auth.GetRefreshToken(r.Header)
+  if err != nil {
+    respondWithError(w, 401, "missing refresh token")
+    return
+  }
 
+  dbToken, err := cfg.db.GetRefreshToken(r.Context(), token)
+  if err != nil {
+    respondWithError(w, 401, "token does not exist")
+    return
+  }
+
+  if dbToken.RevokedAt.Valid {
+    respondWithError(w, 401, "token expired")
+    return
+  }
+
+  expTime := time.Unix(dbToken.ExpiresAt.Unix(), 0)
+  if expTime.Before(time.Now()) {
+    // expired, 
+    respondWithError(w, 401, "expired or revoked token")
+    return
+  }
+
+  // create new token & send ?
+  user, err := cfg.db.GetUserFromRefreshToken(r.Context(), dbToken.Token)
+  if err != nil {
+    respondWithError(w, 500, "could not retrieve user")
+    return
+  }
+
+  tok, err := auth.MakeJWT(user.ID, cfg.secret, 1 * time.Hour)
+  if err != nil {
+    respondWithError(w, 500, "could not create JWT token")
+    return
+  }
+
+  if err != nil {
+    respondWithError(w, 500, "could not add token to the database")
+    return
+  }
+
+  type data struct {
+    Token string `json:"token"`
+  }
+
+  dat := data{
+    Token: tok,
+  }
+
+  respondWithJSON(w, 200, dat)
+}
+
+func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
+  token, err := auth.GetRefreshToken(r.Header)
+  if err != nil {
+    respondWithError(w, 401, "missing refresh token")
+    return
+  }
+
+  dbToken, err := cfg.db.GetRefreshToken(r.Context(), token)
+  if err != nil {
+    respondWithError(w, 401, "token does not exist")
+    return
+  }
+
+  err = cfg.db.RevokeToken(r.Context(), dbToken.Token)
+  if err != nil {
+    respondWithError(w, 401, "could not revoke token")
+  }
+
+  w.WriteHeader(204) 
+}
 
 func main() {
     godotenv.Load()
@@ -332,5 +416,7 @@ func main() {
     mux.HandleFunc("GET /api/chirps", apiConf.handlerGetChirps)
     mux.HandleFunc("GET /api/chirps/{chirpID}", apiConf.handlerGetChirp)
     mux.HandleFunc("POST /api/login", apiConf.handlerLogin)
+    mux.HandleFunc("POST /api/refresh", apiConf.handlerRefresh)
+    mux.HandleFunc("POST /api/revoke", apiConf.handlerRevoke)
 		server.ListenAndServe()
 }
