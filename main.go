@@ -25,6 +25,7 @@ type User struct {
   Email string `json:"email"`
   Token string `json:"token"`
   RefreshToken string `json:"refresh_token"`
+  IsChirpyRed bool `json:"is_chirpy_red"`
 }
 
 type UserInfo struct {
@@ -154,6 +155,7 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request) {
     CreatedAt: u.CreatedAt,
     UpdatedAt: u.UpdatedAt,
     Email: u.Email,
+    IsChirpyRed: u.IsChirpyRed.Bool,
   }
 
   respondWithJSON(w, 201, user)
@@ -306,6 +308,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
     Email: user.Email,
     Token: token,
     RefreshToken: refreshToken,
+    IsChirpyRed: user.IsChirpyRed.Bool,
   }
 
   respondWithJSON(w, 200, userDat)
@@ -429,6 +432,7 @@ func (cfg *apiConfig) handlerUpdate(w http.ResponseWriter, r *http.Request) {
     CreatedAt: user.CreatedAt,
     UpdatedAt: user.UpdatedAt,
     Email: user.Email,
+    IsChirpyRed: user.IsChirpyRed.Bool,
   }
 
   respondWithJSON(w, 200, userDat)
@@ -481,6 +485,47 @@ func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request)
   w.WriteHeader(403)
 }
 
+func (cfg *apiConfig) handlerUpgrade(w http.ResponseWriter, r *http.Request) {
+  type data struct {
+    UserID string `json:"user_id"`
+  }
+
+  type req struct {
+    Event string `json:"event"`
+    Data data 
+  }
+
+  decoder := json.NewDecoder(r.Body)
+  reqData := req{}
+  err := decoder.Decode(&reqData)
+  if err != nil {
+    respondWithError(w, 401, "Something went wrong")
+    return
+  }
+
+  if reqData.Event != "user.upgraded" {
+    w.WriteHeader(204)
+    return
+  }
+
+  userID, err := uuid.Parse(reqData.Data.UserID)
+  if err != nil {
+    w.WriteHeader(401)
+    return
+  }
+
+  _, err = cfg.db.UpgradeUserById(r.Context(), userID)
+  if err != nil {
+    w.WriteHeader(404)
+    return
+  }
+
+  w.WriteHeader(204)
+  
+  
+
+}
+
 func main() {
     godotenv.Load()
     dbURL := os.Getenv("DB_URL")
@@ -515,5 +560,6 @@ func main() {
     mux.HandleFunc("POST /api/revoke", apiConf.handlerRevoke)
     mux.HandleFunc("PUT /api/users", apiConf.handlerUpdate)
     mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiConf.handlerDeleteChirp)
+    mux.HandleFunc("POST /api/polka/webhooks", apiConf.handlerUpgrade)
 		server.ListenAndServe()
 }
